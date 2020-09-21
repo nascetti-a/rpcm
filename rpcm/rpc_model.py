@@ -1,8 +1,10 @@
 """
 RPC model parsers, localization, and projection
-Copyright (C) 2015-19, Carlo de Franchis <carlo.de-franchis@cmla.ens-cachan.fr>
-Copyright (C) 2015-19, Gabriele Facciolo <facciolo@cmla.ens-cachan.fr>
-Copyright (C) 2015-19, Enric Meinhardt <enric.meinhardt@cmla.ens-cachan.fr>
+
+forked by cmla/rpcm
+
+edited by Andrea Nascetti <nascetti@kth.se>
+
 """
 
 import numpy as np
@@ -11,6 +13,7 @@ import rasterio
 
 from rpcm import geo
 from rpcm.rpc_file_readers import read_rpc_file
+from typing import Tuple, NamedTuple
 
 
 class MaxLocalizationIterationsError(Exception):
@@ -90,6 +93,27 @@ def rpc_from_rpc_file(rpc_file_path):
     return RPCModel(read_rpc_file(rpc_file_path))
 
 
+class RPCCoeffs(NamedTuple):
+    height_off: float
+    height_scale: float
+    lat_off: float
+    lat_scale: float
+    line_den_coeff: np.array
+    line_num_coeff: np.array
+    line_off: float
+    line_scale: float
+    long_off: float
+    long_scale: float
+    max_lat: float
+    max_long: float
+    min_lat: float
+    min_long: float
+    samp_den_coeff: np.array
+    samp_num_coeff: np.array
+    samp_off: float
+    samp_scale: float
+
+
 class RPCModel:
     def __init__(self, d, dict_format="geotiff"):
         """
@@ -134,6 +158,39 @@ class RPCModel:
                 "Should be {{'geotiff','rpcm'}}".format(dict_format)
             )
 
+    def fast_rpc(self):
+
+        """
+        Extract the RPC coefficents named tuple for fast ortho-rectification using numba
+
+
+        return: class RPCCoeff
+
+        """
+
+
+        fastrpc = RPCCoeffs(
+            float(self.alt_offset),
+            float(self.alt_scale),
+            float(self.lat_offset),
+            float(self.lat_scale),
+            np.array(self.row_den).astype(np.float32),
+            np.array(self.row_num).astype(np.float32),
+            float(self.row_offset),
+            float(self.row_scale),
+            float(self.lon_offset),
+            float(self.lon_scale),
+            float(0.0),
+            float(0.0),
+            float(0.0),
+            float(0.0),
+            np.array(self.col_den).astype(np.float32),
+            np.array(self.col_num).astype(np.float32),
+            float(self.col_offset),
+            float(self.col_scale)
+        )
+
+        return fastrpc
 
     def projection(self, lon, lat, alt):
         """
@@ -307,9 +364,10 @@ class RPCModel:
 
         # convert to UTM
         epsg = geo.compute_epsg(lon, lat)
-        in_proj = pyproj.Proj(init="epsg:4326")
-        out_proj = pyproj.Proj(init="epsg:{}".format(epsg))
-        [x0, x1], [y0, y1] = pyproj.transform(in_proj, out_proj, [lon0, lon1], [lat0, lat1])
+
+        T = pyproj.Transformer.from_crs(4326, epsg)
+        x0, y0 = T.transform(lat0, lon0)
+        x1, y1 = T.transform(lat1, lon1)
 
         # compute local satellite incidence direction
         p0 = np.array([x0, y0, z + 0*s])
